@@ -172,16 +172,19 @@ func (s *jsonKeyScanner) skipValue() {
 // contractConfig is the plugin-side half of the contract: the model set, the
 // tool names, and the client identity. It is editable so an upstream change is a
 // config edit rather than a code change.
+//
+// The json tags matter: the panel reads this back as JSON and a field without
+// one is emitted capitalised, which the page does not read.
 type contractConfig struct {
-	Enabled     bool                `yaml:"enabled"`
-	Models      []string            `yaml:"models"`
-	ToolNames   []string            `yaml:"tool_names"`
-	Tools       map[string][]string `yaml:"tools"`
-	UserAgent   string              `yaml:"user_agent"`
-	Client      string              `yaml:"client"`
-	Project     string              `yaml:"project"`
-	Upstream    string              `yaml:"upstream"`
-	SessionSalt string              `yaml:"session_salt"`
+	Enabled     bool                `yaml:"enabled" json:"enabled"`
+	Models      []string            `yaml:"models" json:"models"`
+	ToolNames   []string            `yaml:"tool_names" json:"tool_names"`
+	Tools       map[string][]string `yaml:"tools" json:"tools"`
+	UserAgent   string              `yaml:"user_agent" json:"user_agent"`
+	Client      string              `yaml:"client" json:"client"`
+	Project     string              `yaml:"project" json:"project"`
+	Upstream    string              `yaml:"upstream" json:"upstream"`
+	SessionSalt string              `yaml:"session_salt" json:"session_salt"`
 }
 
 func (c contractConfig) userAgent() string {
@@ -239,6 +242,9 @@ func (s *configState) set(cfg contractConfig) {
 	s.mu.RUnlock()
 	if strings.TrimSpace(cfg.UserAgent) == "" {
 		cfg.UserAgent = cur.UserAgent
+	}
+	if !userAgentAccepted(cfg.UserAgent) {
+		cfg.UserAgent = defaultUserAgent
 	}
 	if len(cfg.ToolNames) == 0 {
 		cfg.ToolNames = cur.ToolNames

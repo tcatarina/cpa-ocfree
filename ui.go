@@ -123,7 +123,13 @@ pre.code{margin:0;padding:12px;border-radius:10px;background:var(--surface-2);
 const pageJS = `
 (function () {
   "use strict";
-  var API = "__BASE__";
+  // The page is served from the plugin's resource path, but the writable API
+  // only exists under the management prefix, so the API base has to be derived
+  // from where this page actually lives rather than assumed.
+  var MARK = "/v0/resource/plugins/";
+  var CUT = location.pathname.indexOf(MARK);
+  var PREFIX = CUT >= 0 ? location.pathname.slice(0, CUT) : "";
+  var API = PREFIX + "__API__";
   var $ = function (id) { return document.getElementById(id); };
   function esc(v) {
     return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;")

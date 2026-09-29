@@ -25,7 +25,6 @@ func managementRouteSetResponse() managementRouteSet {
 		{Method: http.MethodGet, Path: resourcePath, Menu: "OpenCode Free", Description: "Free-tier request contract"},
 		{Method: http.MethodGet, Path: resourcePath + "/api", Description: "Read the contract config"},
 		{Method: http.MethodPut, Path: resourcePath + "/api", Description: "Write the contract config"},
-		{Method: http.MethodGet, Path: resourcePath + "/api/config", Description: "Generate the CPA provider block"},
 	}}
 }
 
@@ -47,7 +46,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 		case "css":
 			return okEnvelope(assetResponse("text/css; charset=utf-8", pageCSS))
 		case "js":
-			return okEnvelope(assetResponse("text/javascript; charset=utf-8", strings.ReplaceAll(pageJS, "__BASE__", api)))
+			js := strings.ReplaceAll(pageJS, "__API__", "/v0/management"+api)
+			return okEnvelope(assetResponse("text/javascript; charset=utf-8", js))
 		case "config":
 			out, err := yaml.Marshal(state.get())
 			if err != nil {
@@ -75,20 +75,28 @@ func handleManagement(raw []byte) ([]byte, error) {
 	}
 }
 
+// normalizePath strips the mount prefix the host dispatched on so the result
+// can be compared against the declared route paths.
+//
+// The two prefixes need different treatment. A management path keeps its
+// plugin-id segment: /v0/management/ocfree/api becomes /ocfree/api. A resource
+// path repeats the id: /v0/resource/plugins/ocfree/ocfree/api, so the first
+// segment is dropped and /ocfree/api is kept.
 func normalizePath(p string) string {
 	t := strings.TrimSpace(p)
 	if t == "" {
 		return resourcePath
 	}
-	for _, prefix := range []string{"/v0/resource/plugins/", "/v0/management/"} {
-		if strings.HasPrefix(t, prefix) {
-			rest := t[len(prefix):]
-			if slash := strings.Index(rest, "/"); slash >= 0 {
-				t = rest[slash:]
-			} else {
-				t = "/"
-			}
+	switch {
+	case strings.HasPrefix(t, "/v0/resource/plugins/"):
+		rest := t[len("/v0/resource/plugins/"):]
+		if slash := strings.Index(rest, "/"); slash >= 0 {
+			t = rest[slash:]
+		} else {
+			t = "/"
 		}
+	case strings.HasPrefix(t, "/v0/management/"):
+		t = t[len("/v0/management/"):]
 	}
 	if !strings.HasPrefix(t, "/") {
 		t = "/" + t
