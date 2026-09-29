@@ -2,8 +2,55 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/url"
+	"strings"
 	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
+
+// callResource drives the handler the way the host does for a resource route
+// and returns the response body.
+func callResource(t *testing.T, rawQuery string) string {
+	t.Helper()
+	parsed, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := rpcManagementRequest{
+		ManagementRequest: pluginapi.ManagementRequest{
+			Method: http.MethodGet,
+			Path:   "/v0/resource/plugins/ocfree/ocfree",
+			Query:  parsed,
+		},
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := handleManagement(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			StatusCode int `json:"StatusCode"`
+			Body       []byte
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &env); err != nil {
+		t.Fatalf("unreadable envelope %s: %v", out, err)
+	}
+	if !env.OK {
+		t.Fatalf("handler reported failure: %s", out)
+	}
+	if env.Result.StatusCode != http.StatusOK {
+		t.Fatalf("asset %s answered %d", rawQuery, env.Result.StatusCode)
+	}
+	return string(env.Result.Body)
+}
 
 // The page reads this payload as JSON with lowercase keys. Without the json
 // tags Go emits capitalised field names and the panel renders an empty config.
@@ -34,6 +81,56 @@ func TestConfigJSONUsesLowercaseKeys(t *testing.T) {
 // The host dispatches management and resource requests with different mount
 // shapes. Getting these wrong made every management call fall through to the
 // plugin's own 404, which looks exactly like a missing route.
+// The page used to fetch the config without checking the status, so a 401
+// body was rendered as if it were the config: zero models, a fallback user
+// agent, and the error text in the editor.
+func TestPageChecksResponseStatus(t *testing.T) {
+	if !strings.Contains(pageJS, "if (!r.ok)") {
+		t.Error("the page never checks r.ok, so an error body is rendered as config")
+	}
+	if strings.Contains(pageJS, "return r.json(); }).then(render)") {
+		t.Error("the page still pipes a response straight into render")
+	}
+}
+
+// The page reads from its own resource route, so it needs no management key
+// and there is nothing for it to fail to authenticate against.
+func TestPageReadsStateWithoutAManagementKey(t *testing.T) {
+	if !strings.Contains(pageJS, `get("?asset=state")`) {
+		t.Error("the page does not read its state from the resource route")
+	}
+	if strings.Contains(pageJS, "Authorization") {
+		t.Error("the page should not be sending a management key")
+	}
+	if strings.Contains(pageJS, "v0/management") {
+		t.Error("the page still depends on the management API")
+	}
+}
+
+// The state asset must be JSON the page can parse, with the keys it reads.
+func TestStateAssetIsValidJSON(t *testing.T) {
+	body := callResource(t, "asset=state")
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("state asset is not valid JSON: %v (%s)", err, body)
+	}
+	if models, _ := doc["models"].([]any); len(models) == 0 {
+		t.Errorf("state asset reported no models: %s", body)
+	}
+	if _, ok := doc["enabled"]; !ok {
+		t.Errorf("state asset has no enabled flag: %s", body)
+	}
+}
+
+// Every asset the page fetches must exist, or it silently renders nothing.
+func TestPageAssetsAllResolve(t *testing.T) {
+	for _, asset := range []string{"css", "js", "config", "provider", "state"} {
+		if body := callResource(t, "asset="+asset); body == "" {
+			t.Errorf("asset %s returned an empty body", asset)
+		}
+	}
+}
+
 func TestNormalizePath(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -21,10 +21,11 @@ type managementRouteSet struct {
 }
 
 func managementRouteSetResponse() managementRouteSet {
+	// The page reads everything it needs from its own resource route, so the
+	// only route declared is the page itself. Config edits go through
+	// config.yaml on the host, which is where the config already lives.
 	return managementRouteSet{Routes: []managementRoute{
-		{Method: http.MethodGet, Path: resourcePath, Menu: "OpenCode Free", Description: "Free-tier request contract"},
-		{Method: http.MethodGet, Path: resourcePath + "/api", Description: "Read the contract config"},
-		{Method: http.MethodPut, Path: resourcePath + "/api", Description: "Write the contract config"},
+		{Method: http.MethodGet, Path: resourcePath, Menu: "OpenCode Free", Description: "Free-tier models"},
 	}}
 }
 
@@ -38,7 +39,6 @@ func handleManagement(raw []byte) ([]byte, error) {
 	if method == "" {
 		method = http.MethodGet
 	}
-	api := resourcePath + "/api"
 
 	switch {
 	case path == resourcePath && method == http.MethodGet:
@@ -46,8 +46,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 		case "css":
 			return okEnvelope(assetResponse("text/css; charset=utf-8", pageCSS))
 		case "js":
-			js := strings.ReplaceAll(pageJS, "__API__", "/v0/management"+api)
-			return okEnvelope(assetResponse("text/javascript; charset=utf-8", js))
+			return okEnvelope(assetResponse("text/javascript; charset=utf-8", pageJS))
 		case "config":
 			out, err := yaml.Marshal(state.get())
 			if err != nil {
@@ -56,20 +55,14 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return okEnvelope(assetResponse("text/yaml; charset=utf-8", string(out)))
 		case "provider":
 			return okEnvelope(assetResponse("text/yaml; charset=utf-8", providerBlock(state.get())))
+		case "state":
+			raw, err := json.Marshal(state.get())
+			if err != nil {
+				return okEnvelope(assetResponse("application/json; charset=utf-8", `{"error":"marshal failed"}`))
+			}
+			return okEnvelope(assetResponse("application/json; charset=utf-8", string(raw)))
 		}
 		return okEnvelope(assetResponse("text/html; charset=utf-8", pageHTML))
-	case path == api && method == http.MethodGet:
-		return okEnvelope(jsonResponse(200, state.get()))
-	case path == api && method == http.MethodPut:
-		if len(req.Body) == 0 {
-			return okEnvelope(jsonResponse(400, map[string]any{"error": "body is required"}))
-		}
-		var cfg contractConfig
-		if err := yaml.Unmarshal(req.Body, &cfg); err != nil {
-			return okEnvelope(jsonResponse(400, map[string]any{"error": err.Error()}))
-		}
-		state.set(cfg)
-		return okEnvelope(jsonResponse(200, state.get()))
 	default:
 		return okEnvelope(jsonResponse(404, map[string]any{"error": "not found"}))
 	}
