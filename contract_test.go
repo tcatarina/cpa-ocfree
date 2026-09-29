@@ -78,7 +78,7 @@ func TestProviderBlockIsUsable(t *testing.T) {
 	block := providerBlock(defaultConfig())
 	for _, want := range []string{
 		"base-url: https://opencode.ai/zen/v1",
-		`- api-key: ""`,
+		"      - {}",
 		"User-Agent: \"opencode/1.18.31\"",
 		"x-opencode-client: \"desktop\"",
 		"- name: space-bunny-free",
@@ -89,8 +89,8 @@ func TestProviderBlockIsUsable(t *testing.T) {
 	}
 	// A populated key is sent upstream as a Bearer token and answered with 401.
 	for _, line := range strings.Split(block, "\n") {
-		if strings.Contains(line, "api-key:") && !strings.Contains(line, `api-key: ""`) {
-			t.Errorf("generated a non-empty api key: %q", strings.TrimSpace(line))
+		if strings.Contains(line, "api-key:") {
+			t.Errorf("generated an api-key line, want the field omitted: %q", strings.TrimSpace(line))
 		}
 	}
 	// Every identity header must carry a canonical id, or the tier refuses it.

@@ -142,11 +142,13 @@ func providerBlock(cfg contractConfig) string {
 	b.WriteString("openai-compatibility:\n")
 	b.WriteString("  - name: opencode-free\n")
 	b.WriteString("    base-url: " + cfg.Upstream + "\n")
-	b.WriteString("    # An empty key sends no Authorization header. A non-empty one is\n")
-	b.WriteString("    # rejected upstream with 401 Invalid API key.\n")
+	b.WriteString("    # No api-key on purpose: an empty one sends no Authorization\n")
+	b.WriteString("    # header, and a populated one is refused upstream with 401\n")
+	b.WriteString("    # Invalid API key. Each entry is still its own auth record,\n")
+	b.WriteString("    # so several of them give rotation several members.\n")
 	b.WriteString("    api-key-entries:\n")
 	for i := 1; i <= 3; i++ {
-		b.WriteString("      - api-key: \"\"\n")
+		b.WriteString("      - {}\n")
 	}
 	b.WriteString("    headers:\n")
 	b.WriteString("      User-Agent: \"" + cfg.userAgent() + "\"\n")
