@@ -1,0 +1,4 @@
+dist/
+cpa-plugin-ocfree
+ocfree.h
+*.log

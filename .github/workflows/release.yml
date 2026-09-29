@@ -1,0 +1,173 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_NAME: ocfree
+  PLUGIN_VERSION: ${{ github.ref_name }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::gofmt needed for: ${unformatted}"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build host plugin
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=1 go build -trimpath -buildmode=c-shared \
+            -ldflags "-X main.pluginVersion=${PLUGIN_VERSION#v}" \
+            -o "dist/${PLUGIN_NAME}.so" .
+          rm -f dist/*.h
+          test -s "dist/${PLUGIN_NAME}.so"
+
+      - name: Verify the C ABI symbol is exported
+        run: |
+          set -euo pipefail
+          artifact="dist/${PLUGIN_NAME}.so"
+          if ! nm -D "${artifact}" | grep -q ' T cliproxy_plugin_init$'; then
+            echo "::error::cliproxy_plugin_init is not exported"
+            nm -D "${artifact}" | grep -i cliproxy || true
+            exit 1
+          fi
+          file "${artifact}"
+
+      - name: Verify the version was stamped
+        run: |
+          set -euo pipefail
+          artifact="dist/${PLUGIN_NAME}.so"
+          want="${PLUGIN_VERSION#v}"
+          if ! strings "${artifact}" | grep -qF -- "${want}"; then
+            echo "::error::version '${want}' is not in the binary; the -X ldflag did not apply"
+            exit 1
+          fi
+          echo "stamped version: ${want}"
+
+  build:
+    name: Build ${{ matrix.target }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            goarch: amd64
+            cc: gcc
+          - target: linux-arm64
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+
+      - name: Install cross toolchain
+        if: matrix.cc != 'gcc'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
+        run: |
+          set -euo pipefail
+          staging="${PLUGIN_NAME}_${GITHUB_REF_NAME#v}_${{ matrix.target }}"
+          mkdir -p "dist/${staging}"
+          CGO_ENABLED=1 GOOS=linux go build -trimpath \
+            -buildmode=c-shared \
+            -ldflags "-X main.pluginVersion=${PLUGIN_VERSION#v}" \
+            -o "dist/${staging}/${PLUGIN_NAME}.so" .
+          rm -f dist/*.h
+          cp README.md "dist/${staging}/README.md"
+          tar -czf "dist/${staging}.tar.gz" -C dist "${staging}"
+
+      - name: Verify artifact
+        run: |
+          set -euo pipefail
+          staging="${PLUGIN_NAME}_${GITHUB_REF_NAME#v}_${{ matrix.target }}"
+          artifact="dist/${staging}/${PLUGIN_NAME}.so"
+          test -s "${artifact}"
+          file "${artifact}"
+          if ! nm -D "${artifact}" | grep -q ' T cliproxy_plugin_init$'; then
+            echo "::error::cliproxy_plugin_init is not exported from ${artifact}"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: pkg-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          fail_on_unmatched_files: true
