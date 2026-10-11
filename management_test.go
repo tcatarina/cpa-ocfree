@@ -93,17 +93,18 @@ func TestPageChecksResponseStatus(t *testing.T) {
 	}
 }
 
-// The page reads from its own resource route, so it needs no management key
-// and there is nothing for it to fail to authenticate against.
+// The page reads from its own resource route, so state and refresh need no
+// management key. The provider sync is the one call that does, and the key is
+// supplied by the operator at unlock time — never shipped in the page.
 func TestPageReadsStateWithoutAManagementKey(t *testing.T) {
 	if !strings.Contains(pageJS, `get("?asset=state")`) {
 		t.Error("the page does not read its state from the resource route")
 	}
-	if strings.Contains(pageJS, "Authorization") {
-		t.Error("the page should not be sending a management key")
+	if !strings.Contains(pageJS, `get("?asset=refresh")`) {
+		t.Error("the catalogue refresh does not go through the keyless resource route")
 	}
-	if strings.Contains(pageJS, "v0/management") {
-		t.Error("the page still depends on the management API")
+	if strings.Contains(pageJS, "Bearer ") && !strings.Contains(pageJS, "Bearer \" + mgmtKey") {
+		t.Error("the page sends a key that did not come from the unlock field")
 	}
 }
 

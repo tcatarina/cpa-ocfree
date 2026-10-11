@@ -46,8 +46,12 @@ the two halves cannot drift.
      http://127.0.0.1:8317/v0/resource/plugins/ocfree/ocfree?asset=provider
    ```
 
-4. Restart CPA. The catalog only refreshes on a real config change or restart.
+4. Restart CPA to load the plugin and provider block.
 
+New models later need no restart and no edit: the **OpenCode Free** page has a
+Refresh button that re-reads the upstream catalogue into the live target set.
+Unlocked with the management key, it also adds the new models to the CPA
+provider block, which is what makes them routable.
 ## The generated provider block
 
 ```yaml

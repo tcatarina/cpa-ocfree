@@ -61,6 +61,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 				return okEnvelope(assetResponse("application/json; charset=utf-8", `{"error":"marshal failed"}`))
 			}
 			return okEnvelope(assetResponse("application/json; charset=utf-8", string(raw)))
+		case "refresh":
+			return okEnvelope(refreshResponse())
 		}
 		return okEnvelope(assetResponse("text/html; charset=utf-8", pageHTML))
 	default:
@@ -123,6 +125,39 @@ func jsonResponse(status int, payload any) pluginapi.ManagementResponse {
 		Headers:    http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
 		Body:       raw,
 	}
+}
+
+// refreshResponse re-reads the upstream catalogue and merges what it finds
+// into the live target set, then reports what changed.
+//
+// It rides the existing resource route as a GET asset rather than a declared
+// POST management route on purpose: resource routes are GET-only on the host,
+// and the page that calls this needs no management key. The action is safe to
+// expose that way — it only ever unions catalogue `-free` ids (plus the shipped
+// suffix-less table) into the set, and a failed read keeps the old set, so the
+// worst a stray fetch does is a cheap upstream GET.
+func refreshResponse() pluginapi.ManagementResponse {
+	before := state.get().Models
+	merged := mergeDiscovered(state.get())
+	state.set(merged)
+	had := make(map[string]bool, len(before))
+	for _, id := range before {
+		had[id] = true
+	}
+	var added []string
+	for _, id := range merged.Models {
+		if !had[id] {
+			added = append(added, id)
+		}
+	}
+	if added == nil {
+		added = []string{}
+	}
+	return jsonResponse(200, map[string]any{
+		"models": merged.Models,
+		"added":  added,
+		"total":  len(merged.Models),
+	})
 }
 
 // providerBlock renders the openai-compatibility entry that points CPA at the

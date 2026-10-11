@@ -92,7 +92,69 @@ func TestDiscoverUsesTheDefaultUpstreamWhenUnset(t *testing.T) {
 	}
 }
 
-// A reachable catalog with no free model in it is a bad read, not an empty tier.
+// The refresh asset merges the catalogue into the live set and reports the
+// delta, so the page can show what changed without another round trip.
+func TestRefreshMergesAndReportsAdded(t *testing.T) {
+	srv := catalogServer(t, []string{"space-bunny-free", "step-5-preview-free", "gpt-6.1-sol"})
+	defer srv.Close()
+
+	prev := state.get()
+	defer state.set(prev)
+	state.set(contractConfig{
+		Enabled: true, Client: "desktop", Project: "global",
+		Upstream: srv.URL, Models: []string{"space-bunny-free", "big-pickle"},
+	})
+
+	resp := refreshResponse()
+	if resp.StatusCode != 200 {
+		t.Fatalf("refresh answered %d", resp.StatusCode)
+	}
+	var got struct {
+		Models []string `json:"models"`
+		Added  []string `json:"added"`
+		Total  int      `json:"total"`
+	}
+	if err := json.Unmarshal(resp.Body, &got); err != nil {
+		t.Fatalf("unreadable refresh body: %v", err)
+	}
+	if !reflect.DeepEqual(got.Added, []string{"step-5-preview-free"}) {
+		t.Errorf("added = %v, want [step-5-preview-free]", got.Added)
+	}
+	if got.Total != 3 || !reflect.DeepEqual(got.Models, []string{"space-bunny-free", "big-pickle", "step-5-preview-free"}) {
+		t.Errorf("models = %v total %d, want the merged three", got.Models, got.Total)
+	}
+	if live := state.get().Models; !reflect.DeepEqual(live, got.Models) {
+		t.Errorf("live set = %v, want the merged list", live)
+	}
+}
+
+// A failed catalogue read keeps the set and reports nothing added, never an
+// error: the button must degrade to "nothing new", not break the page.
+func TestRefreshKeepsSetWhenCatalogueUnreadable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	prev := state.get()
+	defer state.set(prev)
+	state.set(contractConfig{
+		Enabled: true, Client: "desktop", Project: "global",
+		Upstream: srv.URL, Models: []string{"space-bunny-free"},
+	})
+
+	resp := refreshResponse()
+	var got struct {
+		Models []string `json:"models"`
+		Added  []string `json:"added"`
+	}
+	if err := json.Unmarshal(resp.Body, &got); err != nil {
+		t.Fatalf("unreadable refresh body: %v", err)
+	}
+	if len(got.Added) != 0 || !reflect.DeepEqual(got.Models, []string{"space-bunny-free"}) {
+		t.Errorf("models = %v added = %v, want the set kept", got.Models, got.Added)
+	}
+}
 func TestDiscoverRejectsCatalogWithNoFreeModel(t *testing.T) {
 	srv := catalogServer(t, []string{"gpt-6.1-sol", "claude-opus-5-5"})
 	defer srv.Close()

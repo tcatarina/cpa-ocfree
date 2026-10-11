@@ -28,6 +28,15 @@ const pageHTML = `<!doctype html>
     <h2>Models</h2>
     <div id="models" class="models"></div>
     <p class="hint" id="models-hint"></p>
+    <div class="row">
+      <button class="btn" id="refresh-models">Refresh from catalogue</button>
+      <input id="mgmt-key" class="key" type="password" placeholder="Management key to also update the provider" autocomplete="off">
+      <button class="btn ghost" id="unlock-btn">Unlock</button>
+      <span id="refresh-msg" class="msg"></span>
+    </div>
+    <p class="hint">Refresh re-reads the upstream catalogue with no restart. Unlocked, it
+    also adds the new models to the CPA provider block, which is what makes them
+    routable — the plugin alone cannot route a model CPA does not list.</p>
   </section>
 
   <section class="card">
@@ -90,6 +99,8 @@ pre.code{margin:0;padding:12px;border-radius:10px;background:var(--surface-2);
 .btn.ghost{background:transparent}
 .msg{font-size:12px;color:var(--muted)}
 .msg[data-c="ok"]{color:var(--ok)} .msg[data-c="err"]{color:#dc2626}
+.key{font:inherit;font-size:12.5px;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);width:300px}
 .models{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .mchip{font-family:ui-monospace,monospace;font-size:11.5px;padding:3px 8px;border-radius:7px;
   background:var(--surface-2);border:1px solid var(--border)}
@@ -128,21 +139,124 @@ const pageJS = `
     });
   }
 
-  get("?asset=state")
-    .then(function (t) {
+  function renderModels(models) {
+    $("models").innerHTML = models.map(function (name) {
+      return '<span class="mchip">' + esc(name) + "</span>";
+    }).join("");
+    $("models-hint").textContent = models.length
+      ? models.length + " models. Some are served intermittently upstream."
+      : "No models configured.";
+  }
+
+  function loadState() {
+    return get("?asset=state").then(function (t) {
       var cfg = JSON.parse(t);
       var on = cfg.enabled !== false;
       $("state").textContent = on ? "active" : "disabled";
       $("state").dataset.on = on ? "1" : "0";
-      var models = cfg.models || [];
-      $("models").innerHTML = models.map(function (name) {
-        return '<span class="mchip">' + esc(name) + "</span>";
-      }).join("");
-      $("models-hint").textContent = models.length
-        ? models.length + " models. Some are served intermittently upstream."
-        : "No models configured.";
-    })
-    .catch(function (e) { fail("Could not read the plugin config: " + e.message); });
+      renderModels(cfg.models || []);
+    });
+  }
+
+  loadState().catch(function (e) { fail("Could not read the plugin config: " + e.message); });
+
+  // Same convention as the combos page: the management key lives in
+  // localStorage, unlocked once, and only the provider sync below needs it.
+  // The catalogue refresh itself is keyless.
+  var MARK = "/v0/resource/plugins/";
+  var CUT = location.pathname.indexOf(MARK);
+  var PREFIX = CUT >= 0 ? location.pathname.slice(0, CUT) : "";
+  var KEY_STORE = "ocfree-management-key";
+  var mgmtKey = null;
+  try { mgmtKey = localStorage.getItem(KEY_STORE) || null; } catch (e) { mgmtKey = null; }
+
+  function applyLock() {
+    var unlocked = !!mgmtKey;
+    $("unlock-btn").textContent = unlocked ? "Lock" : "Unlock";
+    if (unlocked) $("mgmt-key").value = "";
+    else { try { $("mgmt-key").placeholder = "Management key to also update the provider"; } catch (e) {} }
+  }
+
+  $("unlock-btn").addEventListener("click", function () {
+    if (mgmtKey) {
+      mgmtKey = null;
+      try { localStorage.removeItem(KEY_STORE); } catch (e) {}
+    } else {
+      var v = $("mgmt-key").value.replace(/^\s+|\s+$/g, "");
+      if (!v) return;
+      mgmtKey = v;
+      try { localStorage.setItem(KEY_STORE, v); } catch (e) {}
+    }
+    applyLock();
+  });
+  applyLock();
+
+  // Adds the new models to the CPA provider block so they route. Read-modify-
+  // write on the provider sub-path: siblings pass through untouched, and a PUT
+  // with a real diff makes the host re-register without a restart.
+  function syncProvider(added) {
+    var url = PREFIX + "/v8/management/config/api-keys/openai-compatibility";
+    var headers = { "Content-Type": "application/json", Authorization: "Bearer " + mgmtKey };
+    return fetch(url, { headers: { Authorization: "Bearer " + mgmtKey } })
+      .then(function (r) {
+        if (!r.ok) throw new Error("provider read HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (provs) {
+        var p = null, i;
+        for (i = 0; i < provs.length; i++) {
+          if (provs[i].name === "opencode-free") { p = provs[i]; break; }
+        }
+        if (!p) {
+          for (i = 0; i < provs.length; i++) {
+            if (String(provs[i]["base-url"] || "").indexOf("opencode.ai") >= 0) { p = provs[i]; break; }
+          }
+        }
+        if (!p) throw new Error("no opencode provider in CPA config");
+        var have = {}, fresh = [];
+        (p.models || []).forEach(function (m) { have[m.name] = true; });
+        (added || []).forEach(function (name) {
+          if (!have[name]) { p.models.push({ name: name }); fresh.push(name); }
+        });
+        if (!fresh.length) return "Provider already lists them.";
+        return fetch(url, { method: "PUT", headers: headers, body: JSON.stringify(provs) })
+          .then(function (r) {
+            if (!r.ok) throw new Error("provider write HTTP " + r.status);
+            return "Provider updated (" + fresh.join(", ") + "), live now.";
+          });
+      });
+  }
+
+  $("refresh-models").addEventListener("click", function () {
+    var out = $("refresh-msg");
+    out.textContent = "Refreshing…";
+    out.dataset.c = "";
+    get("?asset=refresh")
+      .then(function (t) {
+        var res = JSON.parse(t);
+        renderModels(res.models || []);
+        var added = res.added || [];
+        if (!added.length) {
+          out.textContent = "Catalogue read; nothing new.";
+          out.dataset.c = "ok";
+          return;
+        }
+        if (!mgmtKey) {
+          out.textContent = "Plugin knows " + added.join(", ") + " — unlock to add to the provider.";
+          out.dataset.c = "ok";
+          return;
+        }
+        return syncProvider(added).then(function (note) {
+          out.textContent = note;
+          out.dataset.c = "ok";
+        });
+      })
+      .catch(function (e) {
+        out.textContent = "Refresh failed: " + e.message;
+        out.dataset.c = "err";
+      });
+    setTimeout(function () { out.textContent = ""; }, 12000);
+  });
 
   get("?asset=provider").then(function (t) { $("provider").textContent = t; })
     .catch(function (e) { $("provider").textContent = "unavailable: " + e.message; });
