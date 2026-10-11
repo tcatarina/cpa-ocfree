@@ -116,9 +116,15 @@ type registration struct {
 }
 
 type registrationCapability struct {
-	RequestInterceptor  bool `json:"request_interceptor"`
-	ResponseInterceptor bool `json:"response_interceptor"`
-	ManagementAPI       bool `json:"management_api"`
+	RequestInterceptor    bool     `json:"request_interceptor"`
+	ResponseInterceptor   bool     `json:"response_interceptor"`
+	ManagementAPI         bool     `json:"management_api"`
+	AuthProvider          bool     `json:"auth_provider"`
+	ModelRegistrar        bool     `json:"model_registrar"`
+	Executor              bool     `json:"executor"`
+	ExecutorModelScope    string   `json:"executor_model_scope"`
+	ExecutorInputFormats  []string `json:"executor_input_formats"`
+	ExecutorOutputFormats []string `json:"executor_output_formats"`
 }
 
 type rpcManagementRequest struct {
@@ -206,6 +212,22 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleInterceptBefore(request)
 	case pluginabi.MethodResponseInterceptAfter:
 		return handleInterceptAfter(request)
+	case pluginabi.MethodModelRegister:
+		return handleExecutorModelRegister()
+	case pluginabi.MethodAuthIdentifier:
+		return okEnvelope(map[string]string{"identifier": executorProviderName})
+	case pluginabi.MethodAuthParse:
+		return handleAuthParse(request)
+	case pluginabi.MethodExecutorIdentifier:
+		return okEnvelope(map[string]string{"identifier": executorProviderName})
+	case pluginabi.MethodExecutorExecute:
+		return handleExecute(request, false)
+	case pluginabi.MethodExecutorExecuteStream:
+		return handleExecute(request, true)
+	case pluginabi.MethodExecutorCountTokens:
+		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(`{"input_tokens":0}`)})
+	case pluginabi.MethodExecutorHTTPRequest:
+		return errorEnvelope("unsupported", "ocfree serves model executions, not raw HTTP"), nil
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(managementRouteSetResponse())
 	case pluginabi.MethodManagementHandle:
@@ -233,6 +255,19 @@ func pluginRegistration() registration {
 			RequestInterceptor:  true,
 			ResponseInterceptor: true,
 			ManagementAPI:       true,
+			// Mints the keyless auth the executor-owned models run under.
+			AuthProvider: true,
+			// The Muse Spark ids are executed in-plugin (see executor.go):
+			// the host's compat executor would translate their Responses
+			// requests into chat completions, which the upstream refuses.
+			// Only responses in and out — the surface the tier serves them
+			// on. Anything else was never servable through CPA, so a clean
+			// negotiation error replaces the 400, not a working path.
+			ModelRegistrar:        true,
+			Executor:              true,
+			ExecutorModelScope:    "static",
+			ExecutorInputFormats:  []string{"openai-response"},
+			ExecutorOutputFormats: []string{"openai-response"},
 		},
 	}
 }

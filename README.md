@@ -113,6 +113,26 @@ Also unserved at the time of writing: `jev-1.13-free`, `ling-3.0-flash-fin-free`
 (`ModelProtocolUnsupported` on both surfaces). Retired upstream:
 `mimo-v2.5-free` (`Model is not supported`), `exo-free` (`ModelDeprecated`).
 
+## Executor-owned models
+
+The Muse Spark ids are served only on the Responses API, but CPA's
+openai-compatibility executor translates every responses request into chat
+completions — which this family refuses with `400 ModelProtocolUnsupported`.
+The interceptor cannot change that (translation happens inside the executor),
+so the plugin executes these models itself: it registers them under its own
+provider and posts the Responses body verbatim to `{upstream}/responses`.
+
+Three setup pieces, all in-repo:
+
+- `auths/ocfree.json`: `{"type": "ocfree"}`. The host offers the file to plugin
+  parsers and the plugin mints one keyless auth from it — the executor needs a
+  credential selected before it runs, even though the tier needs none.
+- The ids must **not** sit in the CPA provider block. A model with a native
+  executor is never claimed by a plugin; leave them listed and the plugin
+  executor never runs.
+- Responses in and out only — the surface the tier serves them on. Chat callers
+  get a clean negotiation error instead of the 400.
+
 ## Tools
 
 The tier inspects the `tools` array, and acceptance varies by model: an invented
