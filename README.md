@@ -83,24 +83,31 @@ Two details are load-bearing:
 
 ## Models
 
-Measured 2026-09-29 against the live endpoint. The `-free` suffix alone is not a
-reliable filter: of eleven `-free` models, four were unserved, and `big-pickle`
-works with no suffix at all. The plugin ships an explicit allowlist.
+Measured 2026-10-11 against the live endpoint. The `-free` suffix alone is not a
+reliable filter: of the `-free` models in the catalogue, several were unserved,
+and `big-pickle` works with no suffix at all. So the plugin reads the upstream
+catalogue (`GET {upstream}/models`) on registration and on every reconfigure,
+and merges the free ids it finds into the configured list — a free model
+OpenCode adds tomorrow is in scope without an edit. What the catalogue cannot
+say (it marks nothing as free) stays shipped: the one measured suffix-less
+model, `big-pickle`. A catalogue read that fails keeps the configured list, so
+an outage never empties the target set.
 
-| model | verified |
+| model | verified 2026-10-11 |
 |---|---|
 | `big-pickle` | yes |
+| `ling-3.1-flash-free` | yes |
 | `longcat-2.5-preview-free` | yes |
-| `mimo-v2.5-free` | yes |
 | `mimo-v2.6-flash-free` | yes |
 | `nemotron-3-ultra-free` | yes, occasionally empty (budget spent on reasoning) |
 | `nemotron-3.5-lightning-free` | yes |
 | `space-bunny-free` | yes |
+| `step-5-preview-free` | yes |
 
-Also unserved at the time of writing: `deepseek-v4-flash-free` (`Model is
-unavailable`), `jev-1.13-free`, `ling-3.0-flash-fin-free`, and both
-`muse-spark-*-contributor-free` models. Edit the list on the plugin page when
-the upstream catalogue changes; no rebuild is needed.
+Also unserved at the time of writing: `jev-1.13-free`, `ling-3.0-flash-fin-free`,
+`muse-spark-1.2-contributor-free`, and `muse-spark-1.3-contributor-free`
+(`ModelProtocolUnsupported` on both surfaces). Retired upstream:
+`mimo-v2.5-free` (`Model is not supported`), `exo-free` (`ModelDeprecated`).
 
 ## Tools
 
@@ -142,7 +149,7 @@ the panel, which round-trips YAML:
 | key | meaning |
 |---|---|
 | `enabled` | apply the contract |
-| `models` | the allowlist; requests for anything else pass through untouched |
+| `models` | extra targets beyond what catalogue discovery finds; the configured list is the merge base |
 | `tool_names` | names seeded when a caller sends no tools |
 | `tools` | per-model override of `tool_names` |
 | `user_agent` | must satisfy `opencode/1.17` or newer |

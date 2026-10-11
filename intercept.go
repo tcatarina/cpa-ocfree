@@ -30,6 +30,11 @@ func applyConfig(raw []byte) error {
 	if err := yaml.Unmarshal(req.ConfigYAML, &cfg); err != nil {
 		return err
 	}
+	// A free model OpenCode adds tomorrow has to be in scope without an edit:
+	// the allowlist below is the only thing standing between a request and the
+	// contract, and a list hand-maintained against a catalog that moves on its
+	// own is what silently stopped matching.
+	cfg = mergeDiscovered(cfg)
 	state.set(cfg)
 	logInfo("configured models=" + strings.Join(state.get().Models, ","))
 	return nil

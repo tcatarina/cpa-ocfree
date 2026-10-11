@@ -194,6 +194,17 @@ func (c contractConfig) userAgent() string {
 	return defaultUserAgent
 }
 
+// upstream is the configured base URL, or the one the plugin ships with. It has
+// to answer the same question state.set does, because the config reaching a
+// caller here has not been normalised yet — an unset upstream otherwise reads
+// as "no upstream configured" rather than as the default.
+func (c contractConfig) upstream() string {
+	if v := strings.TrimSpace(c.Upstream); v != "" {
+		return v
+	}
+	return defaultConfig().Upstream
+}
+
 func (c contractConfig) targets() map[string]bool {
 	out := make(map[string]bool, len(c.Models))
 	for _, m := range c.Models {
