@@ -41,8 +41,8 @@ func discoverFreeModels(cfg contractConfig) ([]string, error) {
 	req.Header.Set("User-Agent", cfg.userAgent())
 	req.Header.Set("x-opencode-client", cfg.Client)
 	req.Header.Set("x-opencode-project", cfg.Project)
-	req.Header.Set("x-opencode-session", canonicalID("ses_", cfg.SessionSalt))
-	req.Header.Set("x-opencode-request", canonicalID("msg_", cfg.SessionSalt))
+	req.Header.Set("x-opencode-session", opencodeID("ses_"))
+	req.Header.Set("x-opencode-request", opencodeID("msg_"))
 
 	resp, err := (&http.Client{Timeout: discoverTimeout}).Do(req)
 	if err != nil {

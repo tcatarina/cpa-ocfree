@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // The upstream free tier answers 403 unless the request carries all of:
@@ -19,9 +21,8 @@ import (
 // https://opencode.ai/zen/v1/chat/completions.
 
 const (
-	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	minUserAgentMi = 17
-	// session/request ids are the shape the upstream checks, not the value.
+	base62Alphabet  = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	minUserAgentMi  = 17
 	sessionHexLen   = 6
 	sessionBase62Ln = 14
 )
@@ -35,37 +36,106 @@ var defaultClientToolNames = []string{
 	"list", "todowrite", "webfetch", "task", "patch", "todoread",
 }
 
-// canonicalID renders `<prefix><12 hex><14 base62>`, the shape the upstream
-// validates. A seed makes it deterministic, which is what keeps one conversation
-// on one upstream session and therefore keeps the prompt cache warm: a fresh id
-// per request would miss the cache on every turn.
-func canonicalID(prefix, seed string) string {
-	var sum []byte
-	if seed != "" {
-		d := sha256.Sum256([]byte("opencode\x00" + prefix + "\x00" + seed))
-		sum = d[:]
-	} else {
-		d := sha256.Sum256([]byte(prefix + "\x00" + randomEntropy()))
-		sum = d[:]
+// idClock and idCounter mirror the official client's identifier generator
+// (packages/schema/src/identifier.ts): a millisecond timestamp with a per-call
+// counter, bit-inverted. The counter makes two ids minted in the same
+// millisecond differ, exactly as the client's does.
+var (
+	idMu      sync.Mutex
+	idLast    int64
+	idCounter int64
+)
+
+// opencodeID renders a session id the way the official client does: the low 48
+// bits of ~(unixMillis*4096 + counter) as 12 hex, then 14 random base62 chars.
+//
+// Measured 2026-10-16: the upstream now decodes that timestamp and refuses ids
+// whose time part is not a plausible client encoding — a shape-valid id with a
+// hash where the timestamp belongs answers 403 FreeTierError, while any id in
+// this encoding passes (ages from 0s to 365d and one hour in the future all
+// passed, so the check is the encoding, not freshness).
+//
+// A seed no longer makes the id deterministic — the timestamp is the payload —
+// so conversation stability moved to sessionIDFor, which caches one minted id
+// per conversation key instead.
+func opencodeID(prefix string) string {
+	now := time.Now().UnixMilli()
+	idMu.Lock()
+	if now != idLast {
+		idLast = now
+		idCounter = 0
 	}
-	hexPart := hexEncode(sum[:sessionHexLen])
-	rest := sum[sessionHexLen:]
-	b62 := make([]byte, 0, sessionBase62Ln)
-	for i := 0; len(b62) < sessionBase62Ln; i++ {
-		b62 = append(b62, base62Alphabet[int(rest[i%len(rest)])%len(base62Alphabet)])
+	idCounter++
+	counter := idCounter
+	idMu.Unlock()
+
+	value := uint64(now)*0x1000 + uint64(counter)
+	value = (^value) & ((1 << 48) - 1)
+	out := make([]byte, 0, sessionHexLen*2+sessionBase62Ln)
+	for i := 0; i < sessionHexLen; i++ {
+		b := byte((value >> (40 - 8*uint(i))) & 0xff)
+		out = append(out, hexDigits[b>>4], hexDigits[b&0x0f])
 	}
-	return prefix + hexPart + string(b62)
+	entropy := randomEntropy()
+	for i := 0; i < sessionBase62Ln; i++ {
+		out = append(out, base62Alphabet[int(entropy[i%len(entropy)])%len(base62Alphabet)])
+	}
+	return prefix + string(out)
+}
+
+const hexDigits = "0123456789abcdef"
+
+// sessionIDs caches one minted id per conversation, so the same conversation
+// keeps one upstream session and its prompt cache stays warm — the property the
+// old deterministic ids provided for free. Bounded the same way the request
+// notes are; entries are tiny.
+var (
+	sessionMu    sync.Mutex
+	sessionIDs   = map[string]string{}
+	sessionOrder = make([]string, 0, 64)
+	sessionCap   = 256
+)
+
+func sessionIDFor(key string) string {
+	if key == "" {
+		return opencodeID("ses_")
+	}
+	sessionMu.Lock()
+	if id, ok := sessionIDs[key]; ok {
+		sessionMu.Unlock()
+		return id
+	}
+	sessionMu.Unlock()
+	id := opencodeID("ses_")
+	sessionMu.Lock()
+	if len(sessionIDs) >= sessionCap {
+		for _, k := range sessionOrder {
+			if _, ok := sessionIDs[k]; ok {
+				delete(sessionIDs, k)
+			}
+			sessionOrder = sessionOrder[1:]
+			if len(sessionIDs) < sessionCap {
+				break
+			}
+		}
+	}
+	sessionIDs[key] = id
+	sessionOrder = append(sessionOrder, key)
+	sessionMu.Unlock()
+	return id
 }
 
 func hexEncode(b []byte) string {
-	const digits = "0123456789abcdef"
 	out := make([]byte, 0, len(b)*2)
 	for _, c := range b {
-		out = append(out, digits[c>>4], digits[c&0x0f])
+		out = append(out, hexDigits[c>>4], hexDigits[c&0x0f])
 	}
 	return string(out)
 }
 
+// validCanonicalID checks the shape only. The value's timestamp is validated
+// upstream; locally the shape is all that can be checked without duplicating
+// the gate.
 func validCanonicalID(v string) bool {
 	v = strings.TrimSpace(v)
 	if len(v) != 4+sessionHexLen*2+sessionBase62Ln {
@@ -85,6 +155,39 @@ func validCanonicalID(v string) bool {
 		}
 	}
 	return true
+}
+
+// plausibleSessionID reports whether an id carries the client's timestamp
+// encoding. Shape alone stopped being enough on 2026-10-14: the upstream decodes
+// the 12 hex and refuses what does not decode like a client id, so an id we
+// minted before that date — or one from any other generator — must be replaced
+// rather than forwarded.
+//
+// The encoding note that matters here: the client multiplies unix millis by
+// 4096 before inverting, which overflows the 48 bits it keeps, so the decoded
+// value is the timestamp modulo 2^36 — not an epoch. The check compares against
+// now under that same modulus, with an hour of slack in either direction.
+func plausibleSessionID(v string) bool {
+	if !validCanonicalID(v) {
+		return false
+	}
+	value, err := strconv.ParseUint(v[4:4+sessionHexLen*2], 16, 64)
+	if err != nil {
+		return false
+	}
+	const modulus = uint64(1) << 36
+	// The upstream accepted ages from 0s to 365d and one hour in the future
+	// (measured 2026-10-16), so what it validates is the encoding, not
+	// freshness. Keep a year of slack: anything older than that is not a
+	// session this plugin needs to preserve.
+	const slack = uint64(365 * 24 * 3600 * 1000)
+	decoded := ((^value) & ((1 << 48) - 1)) >> 12
+	now := uint64(time.Now().UnixMilli()) % modulus
+	delta := (decoded + modulus - now%modulus) % modulus
+	if delta > modulus/2 {
+		delta = modulus - delta
+	}
+	return delta <= slack
 }
 
 // userAgentAccepted mirrors the upstream version floor: below 1.17 it answers
@@ -163,19 +266,20 @@ func applyContract(body []byte, headers map[string]string, model, format string,
 		inj.Body = nil
 	}
 
-	// 3. canonical identity headers.
+	// 3. canonical identity headers. The session id is the one the upstream
+	// validates: a client-supplied id is forwarded only when it carries the
+	// client's timestamp encoding, because a shape-valid id from any other
+	// generator is refused. The request id is deliberately not injected — the
+	// official client sends no x-opencode-request at all, and the static one
+	// this plugin used to add was refused alongside the session change.
 	ua := headers["User-Agent"]
 	if !userAgentAccepted(ua) {
 		inj.Headers["User-Agent"] = cfg.userAgent()
 		inj.Applied = append(inj.Applied, "user-agent")
 	}
-	if !validCanonicalID(headers["x-opencode-session"]) {
-		inj.Headers["x-opencode-session"] = canonicalID("ses_", seed)
+	if v := lookupHeader(headers, "x-opencode-session"); !plausibleSessionID(v) {
+		inj.Headers["x-opencode-session"] = sessionIDFor(seed)
 		inj.Applied = append(inj.Applied, "session")
-	}
-	if !validCanonicalID(headers["x-opencode-request"]) {
-		inj.Headers["x-opencode-request"] = canonicalID("msg_", "")
-		inj.Applied = append(inj.Applied, "request-id")
 	}
 	if strings.TrimSpace(headers["x-opencode-client"]) == "" {
 		inj.Headers["x-opencode-client"] = cfg.Client

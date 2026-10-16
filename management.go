@@ -188,8 +188,11 @@ func providerBlock(cfg contractConfig) string {
 	}
 	b.WriteString("    headers:\n")
 	b.WriteString("      User-Agent: \"" + cfg.userAgent() + "\"\n")
-	b.WriteString("      x-opencode-session: \"" + canonicalID("ses_", cfg.SessionSalt) + "\"\n")
-	b.WriteString("      x-opencode-request: \"" + canonicalID("msg_", cfg.SessionSalt) + "\"\n")
+	// The session id must be minted per request in the client's timestamp
+	// encoding, so the block cannot carry a literal: the interceptor mints one
+	// and the $ variable below lifts it off the request the interceptor rewrote.
+	// x-opencode-request is absent on purpose — the official client sends none.
+	b.WriteString("      x-opencode-session: \"$X-Opencode-Session\"\n")
 	b.WriteString("      x-opencode-project: \"" + cfg.Project + "\"\n")
 	b.WriteString("      x-opencode-client: \"" + cfg.Client + "\"\n")
 	b.WriteString("    models:\n")

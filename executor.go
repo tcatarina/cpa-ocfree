@@ -209,12 +209,11 @@ func postUpstream(url string, body []byte, headers map[string]string, timeout ti
 			httpReq.Header.Set(k, v)
 		}
 	}
-	if v := lookupHeader(headers, "x-opencode-session"); !validCanonicalID(v) {
-		httpReq.Header.Set("x-opencode-session", canonicalID("ses_", ""))
+	if v := lookupHeader(headers, "x-opencode-session"); !plausibleSessionID(v) {
+		httpReq.Header.Set("x-opencode-session", opencodeID("ses_"))
 	}
-	if v := lookupHeader(headers, "x-opencode-request"); !validCanonicalID(v) {
-		httpReq.Header.Set("x-opencode-request", canonicalID("msg_", ""))
-	}
+	// No x-opencode-request: the official client sends none, and the upstream's
+	// session gate made every other identity detail we tested irrelevant.
 	if httpReq.Header.Get("x-opencode-client") == "" {
 		httpReq.Header.Set("x-opencode-client", "desktop")
 	}

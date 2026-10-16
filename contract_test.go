@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -93,42 +94,76 @@ func TestProviderBlockIsUsable(t *testing.T) {
 			t.Errorf("generated an api-key line, want the field omitted: %q", strings.TrimSpace(line))
 		}
 	}
-	// Every identity header must carry a canonical id, or the tier refuses it.
+	// The provider block carries a $ variable for the session — the id is minted
+	// per request by the interceptor and lifted off the rewritten request — and
+	// no x-opencode-request at all, matching the official client.
 	cfg := defaultConfig()
 	cfg.SessionSalt = "salt"
 	block = providerBlock(cfg)
-	for _, prefix := range []string{"x-opencode-session:", "x-opencode-request:"} {
-		for _, line := range strings.Split(block, "\n") {
-			if strings.Contains(line, prefix) {
-				id := strings.Trim(strings.TrimSpace(strings.SplitN(line, ":", 2)[1]), "\"")
-				if !validCanonicalID(id) {
-					t.Errorf("%s carries a malformed id %q", prefix, id)
-				}
-			}
+	for _, line := range strings.Split(block, "\n") {
+		if strings.Contains(line, "x-opencode-session:") &&
+			strings.TrimSpace(strings.SplitN(line, ":", 2)[1]) != "\"$X-Opencode-Session\"" {
+			t.Errorf("provider session header is not the $ variable: %q", line)
+		}
+		if strings.Contains(line, "x-opencode-request:") {
+			t.Errorf("provider block still pins a request id: %q", line)
 		}
 	}
 }
 
-func TestCanonicalIDShape(t *testing.T) {
-	id := canonicalID("ses_", "seed")
+func TestOpencodeIDShapeAndEncoding(t *testing.T) {
+	id := opencodeID("ses_")
 	if !validCanonicalID(id) {
 		t.Fatalf("generated id is not canonical: %q", id)
 	}
-	if !strings.HasPrefix(id, "ses_") {
-		t.Fatalf("prefix lost: %q", id)
+	if !plausibleSessionID(id) {
+		t.Fatalf("minted id does not carry the client timestamp encoding: %q", id)
 	}
-	if got := canonicalID("msg_", "seed"); !validCanonicalID(got) || !strings.HasPrefix(got, "msg_") {
+	if got := opencodeID("msg_"); !validCanonicalID(got) || !strings.HasPrefix(got, "msg_") {
 		t.Fatalf("msg id invalid: %q", got)
 	}
-	// A seeded id must be stable, or the prompt cache never hits.
-	if canonicalID("ses_", "seed") != id {
-		t.Fatal("seeded id is not deterministic")
+	// The counter makes two ids minted in the same millisecond differ.
+	if opencodeID("ses_") == opencodeID("ses_") {
+		t.Fatal("consecutive ids must differ")
 	}
-	if canonicalID("ses_", "other") == id {
-		t.Fatal("different seeds must not collide")
+}
+
+// The shape is no longer enough upstream: the 12 hex must decode as the
+// client's inverted timestamp. A hash in that position — what this plugin
+// minted before 2026-10-14 — must be rejected by plausibleSessionID so it is
+// replaced rather than forwarded.
+func TestPlausibleSessionIDRejectsHashTime(t *testing.T) {
+	d := sha256.Sum256([]byte("opencode\x00ses_\x00whatever"))
+	hexPart := hexEncode(d[:6])
+	rest := d[6:]
+	b62 := make([]byte, 0, 14)
+	for i := 0; len(b62) < 14; i++ {
+		b62 = append(b62, base62Alphabet[int(rest[i%len(rest)])%len(base62Alphabet)])
 	}
-	if canonicalID("ses_", "") == canonicalID("ses_", "") {
-		t.Fatal("unseeded ids must differ per call")
+	hashed := "ses_" + string(hexPart) + string(b62)
+	if !validCanonicalID(hashed) {
+		t.Fatalf("fixture is not shape-canonical: %q", hashed)
+	}
+	if plausibleSessionID(hashed) {
+		t.Fatal("a hash where the timestamp belongs passed the plausibility check")
+	}
+	if plausibleSessionID("garbage") || plausibleSessionID("") {
+		t.Fatal("malformed ids passed the plausibility check")
+	}
+	if !plausibleSessionID(opencodeID("ses_")) {
+		t.Fatal("a freshly minted id failed the plausibility check")
+	}
+}
+
+// Conversation stability moved from the id itself to the cache around it: the
+// same conversation key must keep one id, a different key must not.
+func TestSessionIDForStablePerConversation(t *testing.T) {
+	a := sessionIDFor("conv-1")
+	if sessionIDFor("conv-1") != a {
+		t.Fatal("one conversation changed ids mid-flight")
+	}
+	if sessionIDFor("conv-2") == a {
+		t.Fatal("two conversations share one session id")
 	}
 }
 
@@ -164,7 +199,7 @@ func TestContractInjectsAllFiveParts(t *testing.T) {
 	if !contains(inj.Applied, "tools") {
 		t.Error("tools not seeded")
 	}
-	for _, header := range []string{"User-Agent", "x-opencode-session", "x-opencode-request", "x-opencode-client", "x-opencode-project"} {
+	for _, header := range []string{"User-Agent", "x-opencode-session", "x-opencode-client", "x-opencode-project"} {
 		if inj.Headers[header] == "" {
 			t.Errorf("header %s missing", header)
 		}
@@ -172,8 +207,11 @@ func TestContractInjectsAllFiveParts(t *testing.T) {
 	if !userAgentAccepted(inj.Headers["User-Agent"]) {
 		t.Errorf("injected UA would be rejected: %q", inj.Headers["User-Agent"])
 	}
-	if !validCanonicalID(inj.Headers["x-opencode-session"]) {
-		t.Errorf("injected session id invalid: %q", inj.Headers["x-opencode-session"])
+	if !plausibleSessionID(inj.Headers["x-opencode-session"]) {
+		t.Errorf("injected session id would be refused upstream: %q", inj.Headers["x-opencode-session"])
+	}
+	if inj.Headers["x-opencode-request"] != "" {
+		t.Errorf("x-opencode-request injected; the official client sends none: %q", inj.Headers["x-opencode-request"])
 	}
 
 	var doc struct {

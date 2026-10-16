@@ -70,14 +70,6 @@ func handleInterceptBefore(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
 
-	// x-opencode-request is per attempt, never seeded from the conversation, so it
-	// is regenerated on every pass while the session stays put.
-	if req.RequestID != "" {
-		if _, seeded := inj.Headers["x-opencode-request"]; seeded {
-			inj.Headers["x-opencode-request"] = canonicalID("msg_", req.RequestID)
-		}
-	}
-
 	h := make(http.Header, len(inj.Headers))
 	for k, v := range inj.Headers {
 		h.Set(k, v)
