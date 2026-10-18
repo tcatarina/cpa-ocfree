@@ -78,7 +78,7 @@ func TestToolNameReadsEveryShape(t *testing.T) {
 func TestProviderBlockIsUsable(t *testing.T) {
 	block := providerBlock(defaultConfig())
 	for _, want := range []string{
-		"base-url: https://opencode.ai/zen/v1",
+		"base-url: https://opencode.ai/inference/openai/v1",
 		"      - {}",
 		"User-Agent: \"opencode/1.18.31\"",
 		"x-opencode-client: \"desktop\"",

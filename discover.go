@@ -27,7 +27,7 @@ const discoverTimeout = 5 * time.Second
 // set: every request for a known-good model would then pass through
 // uncontracted and be refused by the tier.
 func discoverFreeModels(cfg contractConfig) ([]string, error) {
-	base := strings.TrimRight(cfg.upstream(), "/")
+	base := strings.TrimRight(cfg.catalog(), "/")
 	if base == "" {
 		return nil, fmt.Errorf("no upstream configured")
 	}

@@ -17,8 +17,9 @@ import (
 //  4. a User-Agent naming opencode with major >= 1
 //
 // A request that omits the User-Agent never reaches the tier gate at all: the
-// edge answers 403 Cloudflare 1010 first. Measured 2026-09-29 against
-// https://opencode.ai/zen/v1/chat/completions.
+// edge answers 403 Cloudflare 1010 first. Measured 2026-09-29 against the
+// original zen base, 2026-10-17 unchanged on the inference base the client
+// moved to (the zen base itself now rate-limits every request).
 
 const (
 	base62Alphabet  = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"

@@ -30,6 +30,11 @@ func applyConfig(raw []byte) error {
 	if err := yaml.Unmarshal(req.ConfigYAML, &cfg); err != nil {
 		return err
 	}
+	// Normalize before discovery: an empty Catalog or Upstream in the YAML must
+	// pick up the defaults first, or discovery reads /models off the chat base
+	// (which has none) and the target set collapses to the shipped fallback.
+	state.set(cfg)
+	cfg = state.get()
 	// A free model OpenCode adds tomorrow has to be in scope without an edit:
 	// the allowlist below is the only thing standing between a request and the
 	// contract, and a list hand-maintained against a catalog that moves on its

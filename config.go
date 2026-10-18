@@ -184,6 +184,7 @@ type contractConfig struct {
 	Client      string              `yaml:"client" json:"client"`
 	Project     string              `yaml:"project" json:"project"`
 	Upstream    string              `yaml:"upstream" json:"upstream"`
+	Catalog     string              `yaml:"catalog" json:"catalog"`
 	SessionSalt string              `yaml:"session_salt" json:"session_salt"`
 }
 
@@ -205,6 +206,16 @@ func (c contractConfig) upstream() string {
 	return defaultConfig().Upstream
 }
 
+// catalog is the base the catalogue is read from. Falls back to the chat
+// upstream: if the catalogue ever moves onto the same base, this needs no
+// release to follow.
+func (c contractConfig) catalog() string {
+	if v := strings.TrimSpace(c.Catalog); v != "" {
+		return v
+	}
+	return c.upstream()
+}
+
 func (c contractConfig) targets() map[string]bool {
 	out := make(map[string]bool, len(c.Models))
 	for _, m := range c.Models {
@@ -219,10 +230,15 @@ const defaultUserAgent = "opencode/1.18.31"
 
 func defaultConfig() contractConfig {
 	return contractConfig{
-		Enabled:   true,
-		Client:    "desktop",
-		Project:   "global",
-		Upstream:  "https://opencode.ai/zen/v1",
+		Enabled:  true,
+		Client:   "desktop",
+		Project:  "global",
+		Upstream: "https://opencode.ai/inference/openai/v1",
+		// The catalogue never followed the chat endpoint: the new inference
+		// base has no /models (404, measured 2026-10-17) while the original
+		// zen base still serves it. Discovery reads the catalogue; chat and
+		// the provider block use Upstream.
+		Catalog:   "https://opencode.ai/zen/v1",
 		ToolNames: append([]string(nil), defaultClientToolNames...),
 		Models: []string{
 			"big-pickle",
@@ -271,6 +287,9 @@ func (s *configState) set(cfg contractConfig) {
 	}
 	if strings.TrimSpace(cfg.Upstream) == "" {
 		cfg.Upstream = defaultConfig().Upstream
+	}
+	if strings.TrimSpace(cfg.Catalog) == "" {
+		cfg.Catalog = cur.Catalog
 	}
 	if strings.TrimSpace(cfg.SessionSalt) == "" {
 		cfg.SessionSalt = cur.SessionSalt

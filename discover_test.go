@@ -102,7 +102,7 @@ func TestRefreshMergesAndReportsAdded(t *testing.T) {
 	defer state.set(prev)
 	state.set(contractConfig{
 		Enabled: true, Client: "desktop", Project: "global",
-		Upstream: srv.URL, Models: []string{"space-bunny-free", "big-pickle"},
+		Upstream: srv.URL, Catalog: srv.URL, Models: []string{"space-bunny-free", "big-pickle"},
 	})
 
 	resp := refreshResponse()
@@ -140,7 +140,7 @@ func TestRefreshKeepsSetWhenCatalogueUnreadable(t *testing.T) {
 	defer state.set(prev)
 	state.set(contractConfig{
 		Enabled: true, Client: "desktop", Project: "global",
-		Upstream: srv.URL, Models: []string{"space-bunny-free"},
+		Upstream: srv.URL, Catalog: srv.URL, Models: []string{"space-bunny-free"},
 	})
 
 	resp := refreshResponse()
